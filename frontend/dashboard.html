@@ -1,0 +1,2278 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生産性管理ダッシュボード</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- ApexCharts for modern charts -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    
+    <!-- Error Catcher and Log Console for Intranet / Offline Debugging -->
+    <script>
+        window.addEventListener('error', function(e) {
+            const errDiv = document.createElement('div');
+            errDiv.style.cssText = 'background:#ef4444;color:#fff;padding:16px;font-weight:bold;font-size:14px;position:fixed;top:0;left:0;right:0;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+            errDiv.innerHTML = 'JS Error: ' + e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno + '<br>Stack: ' + (e.error ? e.error.stack : 'No stack');
+            (document.body || document.documentElement).appendChild(errDiv);
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+            const errDiv = document.createElement('div');
+            errDiv.style.cssText = 'background:#f59e0b;color:#fff;padding:16px;font-weight:bold;font-size:14px;position:fixed;top:0;left:0;right:0;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+            errDiv.innerHTML = 'Unhandled Promise Rejection: ' + e.reason + '<br>Stack: ' + (e.reason && e.reason.stack ? e.reason.stack : 'No stack');
+            (document.body || document.documentElement).appendChild(errDiv);
+        });
+
+        // Diagnostic logger console at the bottom (collapsible)
+        document.addEventListener('DOMContentLoaded', () => {
+            const logDiv = document.createElement('div');
+            logDiv.id = 'diagnostic-console';
+            logDiv.style.cssText = 'position:fixed;bottom:0;left:0;right:0;height:24px;background:rgba(15,23,42,0.95);color:#0d9488;font-family:monospace;font-size:10px;overflow-y:hidden;z-index:99999;padding:4px 12px;border-top:2px solid #0d9488;cursor:pointer;display:flex;justify-content:between;align-items:center;transition:height 0.2s ease-out;';
+            logDiv.innerHTML = '<div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:7px;height:7px;background:#10b981;border-radius:50%;box-shadow:0 0 6px #10b981;"></span><strong>デバッグコンソール</strong> (クリックで開閉)</div><div id="log-console-lines" style="flex:1;margin-left:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#94a3b8;text-align:right;"></div>';
+            document.body.appendChild(logDiv);
+            
+            let isExpanded = false;
+            logDiv.addEventListener('click', () => {
+                isExpanded = !isExpanded;
+                logDiv.style.height = isExpanded ? '150px' : '24px';
+                logDiv.style.overflowY = isExpanded ? 'auto' : 'hidden';
+            });
+            
+            const lineContainer = logDiv.querySelector('#log-console-lines');
+            
+            window.logStep = function(msg) {
+                const fullMsg = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+                if (isExpanded) {
+                    const p = document.createElement('p');
+                    p.style.margin = '2px 0';
+                    p.style.textAlign = 'left';
+                    p.innerText = fullMsg;
+                    logDiv.appendChild(p);
+                    logDiv.scrollTop = logDiv.scrollHeight;
+                } else {
+                    lineContainer.innerText = msg;
+                }
+                console.log(fullMsg);
+            };
+            
+            logStep('Diagnostic Console initialized. Preparing filters...');
+            
+            fetchFilters().then(() => {
+                logStep('Filters populated. Loading default tab...');
+                loadTab(currentTab);
+            }).catch(err => {
+                logStep('fetchFilters failed: ' + err);
+            });
+        });
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+            background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+            color: #1e293b;
+        }
+        .card-light {
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            padding: 14px !important; /* Naturally compact cards */
+        }
+        /* Naturally compact page layout containers */
+        #tab-content {
+            padding: 16px !important;
+        }
+        #tab-content .grid {
+            gap: 12px !important;
+        }
+        #tab-content .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+            margin-top: 14px !important;
+        }
+        #tab-content .space-y-4 > :not([hidden]) ~ :not([hidden]) {
+            margin-top: 10px !important;
+        }
+        .sidebar-light {
+            background-color: #ffffff;
+            border-right: 1px solid #e2e8f0;
+        }
+        .active-tab {
+            background-color: #0d9488; /* teal-600 */
+            color: #ffffff;
+            font-weight: 600;
+        }
+        .inactive-tab {
+            color: #475569; /* slate-600 */
+        }
+        .inactive-tab:hover {
+            color: #0f172a; /* slate-900 */
+            background-color: #f1f5f9;
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #0d9488;
+        }
+        /* Table styles */
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        #tbl-daily-loss th, #tbl-daily-loss td,
+        #tbl-daily-worktype th, #tbl-daily-worktype td {
+            text-align: center;
+        }
+        #tbl-daily-customers th, #tbl-daily-customers td {
+            text-align: center;
+            white-space: nowrap;
+        }
+        #tbl-daily-customers th:first-child, #tbl-daily-customers td:first-child {
+            text-align: left;
+            white-space: nowrap;
+        }
+        #tbl-daily-loss th:first-child, #tbl-daily-loss td:first-child,
+        #tbl-daily-worktype th:first-child, #tbl-daily-worktype td:first-child {
+            text-align: left;
+        }
+        th, td {
+            text-align: left;
+            padding: 6px 10px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 11px;
+        }
+        th {
+            position: sticky;
+            top: 0;
+            background-color: #f8fafc;
+            color: #475569;
+            font-weight: 700;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #cbd5e1;
+            z-index: 10;
+        }
+        tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+        tr:hover {
+            background-color: #f1f5f9/60;
+        }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden pb-[24px]"> <!-- Added bottom padding for debug log console -->
+
+    <!-- Sidebar Filters (Light Theme) -->
+    <aside class="w-64 sidebar-light flex flex-col h-full shrink-0 shadow-sm z-10">
+        <!-- Logo Header -->
+        <div class="p-6 flex items-center justify-between border-b border-slate-200">
+            <div class="flex items-center gap-2.5">
+                <i class="fa-solid fa-chart-line text-[#0d9488] text-xl"></i>
+                <span class="text-lg font-bold tracking-wider text-slate-800">生産性管理</span>
+            </div>
+            <a href="/home" class="text-slate-400 hover:text-slate-600 transition" title="ホームへ戻る">
+                <i class="fa-solid fa-house text-lg"></i>
+            </a>
+        </div>
+        
+        <!-- Filter Controls Container -->
+        <div class="flex-1 overflow-y-auto p-6 space-y-6">
+            <div class="flex items-center justify-between">
+                <h4 class="text-xs font-bold tracking-wider text-slate-500 uppercase">
+                    <i class="fa-solid fa-filter mr-1.5 text-slate-400"></i>フィルター設定
+                </h4>
+                <button onclick="resetFilters()" class="text-xs text-[#0d9488] hover:underline font-semibold">リセット</button>
+            </div>
+
+            <!-- Factory Filter (Hidden since dashboard is埼玉県埼玉県埼玉県 focus) -->
+            <div class="space-y-1.5 hidden">
+                <label class="block text-xs font-semibold text-slate-500">工場</label>
+                <select id="filter-factory" onchange="onFilterChange()" class="w-full bg-[#f8fafc] border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0d9488] transition">
+                    <option value="全工場">全工場</option>
+                </select>
+            </div>
+
+            <!-- Kakouki Filter -->
+            <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-slate-500">加工機</label>
+                <select id="filter-kakouki" onchange="onFilterChange()" class="w-full bg-[#f8fafc] border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0d9488] transition">
+                    <option value="全て">全て</option>
+                    <option value="Y">加工機 (Y)</option>
+                    <option value="N">加工機以外 (N)</option>
+                </select>
+            </div>
+
+            <!-- Taisho Filter -->
+            <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-slate-500">対象号機</label>
+                <select id="filter-taisho" onchange="onFilterChange()" class="w-full bg-[#f8fafc] border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0d9488] transition">
+                    <option value="全て">全て</option>
+                    <option value="Y">対象号機 (Y)</option>
+                    <option value="N">対象号機以外 (N)</option>
+                </select>
+            </div>
+
+            <!-- Kubun Filter -->
+            <div class="space-y-1.5">
+                <label class="block text-xs font-semibold text-slate-500">区分</label>
+                <select id="filter-kubun" onchange="onFilterChange()" class="w-full bg-[#f8fafc] border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0d9488] transition">
+                    <option value="全て">全て</option>
+                    <option value="リピート">リピート</option>
+                    <option value="テスト">テスト</option>
+                </select>
+            </div>
+
+            <!-- Machine Multiselect -->
+            <div class="space-y-1.5">
+                <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
+                    <span>機台 (個別選択)</span>
+                    <div class="flex gap-2 text-[10px]">
+                        <button onclick="selectAllMachines()" class="text-[#0d9488] hover:underline font-bold">全選択</button>
+                        <span class="text-slate-300">|</span>
+                        <button onclick="clearAllMachines()" class="text-slate-400 hover:underline font-bold">全解除</button>
+                    </div>
+                </div>
+                <div id="machines-container" class="max-h-64 overflow-y-auto bg-[#f8fafc] border border-slate-200 rounded-lg p-2.5 space-y-1.5">
+                    <!-- Dynamic machine checkboxes -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer / Refresh Status -->
+        <div class="p-6 border-t border-slate-200 bg-slate-50/50">
+            <div class="flex items-center justify-between text-xs text-slate-500">
+                <span class="font-medium text-slate-400">データ同期日時</span>
+                <span id="last-updated-ts" class="font-semibold text-slate-700">-</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 flex flex-col h-full overflow-hidden">
+        <!-- Top Nav / Page Header (Light Theme) -->
+        <header class="h-16 border-b border-slate-200 flex items-center justify-between px-8 bg-white shrink-0 z-10">
+            <!-- Tabs Navigation -->
+            <nav class="flex space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <button onclick="switchTab('summary')" id="tab-btn-summary" class="active-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150 shadow-sm">
+                    <i class="fa-solid fa-chart-pie mr-1.5"></i>月次KPIサマリー
+                </button>
+                <div class="relative group">
+                    <button id="tab-btn-analysis" class="inactive-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150 flex items-center gap-1">
+                        <i class="fa-solid fa-magnifying-glass-chart mr-1.5"></i>生産性寄与度分析 <i class="fa-solid fa-chevron-down text-[9px] text-slate-400"></i>
+                    </button>
+                    <!-- Contiguous hover wrapper starting directly at top-full -->
+                    <div class="absolute left-0 top-full pt-1.5 w-36 z-50 hidden group-hover:block hover:block">
+                        <div class="bg-white border border-slate-200 rounded-xl shadow-lg py-1.5">
+                            <a href="#" onclick="switchAnalysisView('customer'); event.preventDefault();" class="block px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-[#0d9488] transition">得意先分析</a>
+                            <a href="#" onclick="switchAnalysisView('others'); event.preventDefault();" class="block px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-[#0d9488] transition">その他分析</a>
+                        </div>
+                    </div>
+                </div>
+                <button onclick="switchTab('daily')" id="tab-btn-daily" class="inactive-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150">
+                    <i class="fa-solid fa-calendar-check mr-1.5"></i>当月日次管理
+                </button>
+                <button onclick="switchTab('trend')" id="tab-btn-trend" class="inactive-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150">
+                    <i class="fa-solid fa-chart-line mr-1.5"></i>トレンド管理
+                </button>
+            </nav>
+
+            <!-- Page Title Subtitle -->
+            <div class="text-right">
+                <div id="header-report-ym" class="text-sm font-bold text-slate-800">対象月: -</div>
+                <div class="text-[10px] text-slate-400 font-medium">中本パックス 埼玉工場</div>
+            </div>
+        </header>
+
+        <!-- Dynamic Content Body -->
+        <div id="tab-content" class="flex-1 overflow-y-auto p-8 relative">
+            <!-- Global Loader Spinner -->
+            <div id="loader" class="absolute inset-0 bg-white/70 z-50 flex items-center justify-center hidden">
+                <div class="text-center space-y-4">
+                    <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-t-[#0d9488] border-r-transparent border-b-transparent border-l-transparent"></div>
+                    <p class="text-sm text-slate-600 font-bold">データを集計・処理中...</p>
+                </div>
+            </div>
+
+            <!-- View 1: 一覧 (Summary) -->
+            <section id="view-summary" class="space-y-6">
+                <h3 class="text-md font-bold border-l-4 border-[#0d9488] pl-3 text-slate-800">📊 一覧 – 月次生産性サマリー</h3>
+                
+                <!-- KPI cards grid row -->
+                <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4" id="summary-kpis">
+                    <!-- Dynamic KPI cards will be appended here -->
+                </div>
+
+                <!-- Charts: Trend (12 Months) -->
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                    <div class="card-light rounded-2xl p-5">
+                        <div class="text-xs font-bold text-slate-500 mb-4 border-b border-slate-100 pb-2">1時間当たり仕上m数</div>
+                        <div id="chart-summary-productivity" class="min-h-[280px]"></div>
+                    </div>
+                    <div class="card-light rounded-2xl p-5">
+                        <div class="text-xs font-bold text-slate-500 mb-4 border-b border-slate-100 pb-2">平均 LS/分</div>
+                        <div id="chart-summary-lsp" class="min-h-[280px]"></div>
+                    </div>
+                    <div class="card-light rounded-2xl p-5">
+                        <div class="text-xs font-bold text-slate-500 mb-4 border-b border-slate-100 pb-2">平均ロット数 [m]</div>
+                        <div id="chart-summary-lot" class="min-h-[280px]"></div>
+                    </div>
+                </div>
+
+                <!-- Heatmap Section -->
+                <div class="card-light rounded-2xl p-6">
+                    <h4 class="text-sm font-bold border-b border-slate-100 pb-3 text-slate-500 mb-4">
+                        稼働・段取りヒートマップ (直近13ヶ月)
+                    </h4>
+                    <div id="chart-summary-heatmap" class="min-h-[280px]"></div>
+                </div>
+            </section>
+
+            <!-- View 2: 分析 (Analysis) -->
+            <section id="view-analysis" class="space-y-6 hidden">
+                <h3 class="text-md font-bold border-l-4 border-[#0d9488] pl-3 text-slate-800" id="lbl-analysis-title">🔍 分析 – 生産性寄与度分析</h3>
+
+                <!-- Sub-view 1: 得意先分析 (Customer Analysis) -->
+                <div id="analysis-sub-customer" class="space-y-6">
+                    <!-- Waterfall & Contribution -->
+                    <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                        <!-- Waterfall Chart -->
+                        <div class="card-light rounded-2xl p-5">
+                            <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">1時間当り仕上ｍ数 - 変化の分解</div>
+                            <div id="chart-analysis-waterfall" class="min-h-[350px]"></div>
+                        </div>
+
+                        <!-- Customer Contribution Table -->
+                        <div class="card-light rounded-2xl p-5 flex flex-col h-full">
+                            <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">得意先別 寄与度詳細 (生産ギャップ)</div>
+                            <div class="flex-1 overflow-auto max-h-[350px]">
+                                <table id="tbl-customer-contrib">
+                                    <thead>
+                                        <tr>
+                                            <th onclick="sortContribTable('customer')" class="cursor-pointer select-none">得意先 <span id="sort-icon-contrib-customer"></span></th>
+                                            <th onclick="sortContribTable('contrib')" class="cursor-pointer select-none">寄与度 <span id="sort-icon-contrib-contrib"></span></th>
+                                            <th onclick="sortContribTable('noryoku')" class="cursor-pointer select-none">能率差異 <span id="sort-icon-contrib-noryoku"></span></th>
+                                            <th onclick="sortContribTable('kosei')" class="cursor-pointer select-none">構成差異 <span id="sort-icon-contrib-kosei"></span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <!-- Dynamic rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Unified Customer Comparison Table -->
+                    <div class="card-light rounded-2xl p-5">
+                        <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2" id="lbl-cust-detail-comparison">得意先別詳細 比較分析 (当月 vs 前月)</div>
+                        <div class="overflow-auto max-h-[400px]">
+                            <table id="tbl-customer-comparison">
+                                <thead>
+                                    <tr>
+                                        <th onclick="sortComparisonTable('customer')" class="cursor-pointer select-none">得意先 <span id="sort-icon-comp-customer"></span></th>
+                                        <th onclick="sortComparisonTable('仕上m_h')" class="cursor-pointer select-none">1時間当り仕上m数 <span id="sort-icon-comp-仕上m_h"></span></th>
+                                        <th onclick="sortComparisonTable('所要時間_pct')" class="cursor-pointer select-none">所要時間 <span id="sort-icon-comp-所要時間_pct"></span></th>
+                                        <th onclick="sortComparisonTable('ロット数')" class="cursor-pointer select-none">平均ロット数 <span id="sort-icon-comp-ロット数"></span></th>
+                                        <th onclick="sortComparisonTable('LSP')" class="cursor-pointer select-none">平均LSP <span id="sort-icon-comp-LSP"></span></th>
+                                        <th onclick="sortComparisonTable('段取時間')" class="cursor-pointer select-none">段取時間 <span id="sort-icon-comp-段取時間"></span></th>
+                                        <th onclick="sortComparisonTable('生産件数')" class="cursor-pointer select-none">生産件数 <span id="sort-icon-comp-生産件数"></span></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Dynamic comparison rows -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Customer Trend Combo Charts (Interactive) -->
+                    <div class="card-light rounded-2xl p-5 space-y-4">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                            <div class="text-sm font-bold text-slate-800" id="lbl-customer-trend-title">得意先個別トレンド分析 (選択: 未選択)</div>
+                            <div class="text-[11px] text-[#0d9488] font-bold bg-[#0d9488]/5 px-2.5 py-1 rounded-full">上のテーブルから得意先名をクリックして切り替え</div>
+                        </div>
+                        <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                            <!-- Chart 1: 生産性 vs LSP -->
+                            <div>
+                                <div id="chart-cust-productivity-lsp" class="min-h-[260px]"></div>
+                            </div>
+                            <!-- Chart 2: 平均色数 vs 平均段取り時間 -->
+                            <div>
+                                <div id="chart-cust-colors-setup" class="min-h-[260px]"></div>
+                            </div>
+                            <!-- Chart 3: 加工本数 vs 平均投入m -->
+                            <div>
+                                <div id="chart-cust-quantity-length" class="min-h-[260px]"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sub-view 2: その他分析 (Others Factors) -->
+                <div id="analysis-sub-others" class="space-y-6 hidden">
+                    <!-- Dropdown Customer Filter (Dedicated for Others page) -->
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200/60 shadow-sm">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-lg bg-[#0d9488]/10 flex items-center justify-center text-[#0d9488]">
+                                <i class="fa-solid fa-users text-sm"></i>
+                            </div>
+                            <div>
+                                <div class="text-xs font-bold text-slate-800">得意先絞り込み (その他分析専用)</div>
+                                <div class="text-[10px] text-slate-400 font-semibold">このページ内のグラフ（巻m分布、分類推移、用途比）にのみ適用されます</div>
+                            </div>
+                        </div>
+                        <div class="w-full sm:w-72 relative" id="others-customer-dropdown-container">
+                            <!-- Clickable Header resembling a select box -->
+                            <div onclick="toggleOthersCustomerDropdown()" class="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-[#0d9488] transition shadow-sm font-semibold flex items-center justify-between cursor-pointer" id="filter-others-customer-display">
+                                <span class="truncate">全て</span>
+                                <i class="fa-solid fa-chevron-down text-slate-400 text-[10px] ml-2"></i>
+                            </div>
+                            <!-- Searchable drop panel -->
+                            <div id="others-customer-dropdown-list" class="absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-50 p-2 space-y-2 hidden">
+                                <input type="text" id="filter-others-customer-search" oninput="filterOthersCustomerOptions()" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-[11px] text-slate-700 focus:outline-none focus:border-[#0d9488] transition" placeholder="得意先を検索...">
+                                <div id="others-customer-options-container" class="max-h-48 overflow-y-auto space-y-0.5">
+                                    <div onclick="selectOthersCustomerOption('全て')" data-value="全て" class="px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-[#0d9488] font-semibold rounded-lg cursor-pointer transition">全て</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Diverging bar & pie charts & Classification Trend -->
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Left: Roll Length Distribution and Classification Trend -->
+                        <div class="lg:col-span-2 space-y-6">
+                            <!-- Roll Length -->
+                            <div class="card-light rounded-2xl p-5">
+                                <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">巻m 分布変化 (当月 vs 前月)</div>
+                                <div id="chart-analysis-maki-dist" class="min-h-[320px]"></div>
+                            </div>
+                            <!-- Classification Trend (Stacked Area Chart) -->
+                            <div class="card-light rounded-2xl p-5">
+                                <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">分類別 所要時間[h]の推移 (直近13ヶ月)</div>
+                                <div id="chart-analysis-classification-trend" class="min-h-[320px]"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- Right: Stacked Usage Donut Charts -->
+                        <div class="card-light rounded-2xl p-5 flex flex-col h-full">
+                            <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">用途別 構成比 (件数)</div>
+                            <div class="flex-1 flex flex-col justify-around space-y-6">
+                                <div>
+                                    <div class="text-xs font-semibold text-slate-500 mb-2 text-center" id="lbl-yoto-curr">当月</div>
+                                    <div id="chart-analysis-yoto-curr" class="min-h-[240px]"></div>
+                                </div>
+                                <div class="border-t border-slate-100 pt-4">
+                                    <div class="text-xs font-semibold text-slate-500 mb-2 text-center" id="lbl-yoto-prev">前月</div>
+                                    <div id="chart-analysis-yoto-prev" class="min-h-[240px]"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 3: 管理新 (Daily MTD) -->
+            <section id="view-daily" class="space-y-6 hidden">
+                <h3 class="text-md font-bold border-l-4 border-[#0d9488] pl-3 text-slate-800">📋 管理（新）– 当月日次管理</h3>
+
+                <!-- Work days progress bar -->
+                <div class="card-light rounded-2xl p-5 space-y-3">
+                    <div class="flex items-center justify-between text-xs font-bold text-slate-500">
+                        <span>当月 稼働進捗状況 (実稼働日数ベース)</span>
+                        <span id="lbl-daily-workdays-elapsed" class="text-slate-800 font-semibold">- / - 日 (-%)</span>
+                    </div>
+                    <div class="w-full bg-slate-100 rounded-full h-3 border border-slate-200">
+                        <div id="daily-workdays-bar" class="bg-[#0d9488] h-full rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- MTD KPI cards comparison with previous month -->
+                <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4" id="daily-kpis">
+                    <!-- Dynamic cards -->
+                </div>
+
+                <!-- Yesterday metrics + Loss summary (Column 1) and MTD Customer + Work Type (Column 2 & 3) -->
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                    
+                    <!-- Left: Yesterday Summary & Loss Details (xl:col-span-1) -->
+                    <div class="space-y-6 xl:col-span-1">
+                        <!-- Yesterday Metrics Summary -->
+                        <div class="card-light rounded-2xl p-5 space-y-4">
+                            <div class="text-sm font-bold text-slate-800 border-b border-slate-100 pb-2 flex items-center justify-between">
+                                <span>前日実績サマリー</span>
+                                <span id="lbl-yesterday-date" class="text-xs text-slate-400 font-semibold">昨日: -</span>
+                            </div>
+                            <div id="yesterday-metrics-grid" class="grid grid-cols-2 gap-3">
+                                <!-- Dynamic stats -->
+                            </div>
+                        </div>
+                        
+                        <!-- Yesterday Loss Details (内部/外部ロスのみ) -->
+                        <div class="card-light rounded-2xl p-5 flex flex-col">
+                            <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">停止理由・ロス集計（前日実績詳細）</div>
+                            <div class="overflow-auto max-h-[300px] flex-1">
+                                <table id="tbl-daily-loss">
+                                    <thead>
+                                        <tr>
+                                            <th>区分</th>
+                                            <th>作業 / 停止理由</th>
+                                            <th>時間(h)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: MTD Customer & Work Type Summary (xl:col-span-2) -->
+                    <div class="space-y-6 xl:col-span-2">
+                        <!-- MTD Customer Productivity Table -->
+                        <div class="card-light rounded-2xl p-5 flex flex-col">
+                            <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">当月 得意先別生産実績 (構成比順)</div>
+                            <div class="overflow-auto max-h-[300px] flex-1">
+                                <table id="tbl-daily-customers">
+                                    <thead>
+                                        <tr>
+                                            <th>得意先</th>
+                                            <th>1時間当り仕上m数</th>
+                                            <th>所要時間</th>
+                                            <th>平均ロット数</th>
+                                            <th>平均LSP</th>
+                                            <th>段取時間</th>
+                                            <th>生産件数</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <!-- MTD Work Type Breakdown -->
+                        <div class="card-light rounded-2xl p-5 flex flex-col">
+                            <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">当月 作業分類別集計（当月実績詳細）</div>
+                            <div class="overflow-auto max-h-[300px] flex-1">
+                                <table id="tbl-daily-worktype">
+                                    <thead>
+                                        <tr>
+                                            <th>区分</th>
+                                            <th>作業内容</th>
+                                            <th>時間(h)</th>
+                                            <th>比率</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- View 4: 管理旧 (Trend) -->
+            <section id="view-trend" class="space-y-6 hidden">
+                <h3 class="text-md font-bold border-l-4 border-[#0d9488] pl-3 text-slate-800">📈 管理（旧）– トレンド管理</h3>
+
+                <!-- Metric selection selectors -->
+                <div class="card-light rounded-2xl p-4 flex flex-wrap items-center gap-4">
+                    <span class="text-xs font-bold text-slate-500">表示指標:</span>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="switchTrendMetric('生産性')" id="btn-trend-metric-生産性" class="bg-[#0d9488] text-white font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150">
+                            1時間当り仕上m数
+                        </button>
+                        <button onclick="switchTrendMetric('仕上m')" id="btn-trend-metric-仕上m" class="bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150">
+                            仕上m数（仕上+要検品）
+                        </button>
+                        <button onclick="switchTrendMetric('所要時間h')" id="btn-trend-metric-所要時間h" class="bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150">
+                            所要時間[h]
+                        </button>
+                        <button onclick="switchTrendMetric('稼働率')" id="btn-trend-metric-稼働率" class="bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150">
+                            稼働率 (%)
+                        </button>
+                        <button onclick="switchTrendMetric('LSP')" id="btn-trend-metric-LSP" class="bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150">
+                            LS/分
+                        </button>
+                        <button onclick="switchTrendMetric('段取時間件')" id="btn-trend-metric-段取時間件" class="bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150">
+                            段取り時間/件
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Chart & Data Table -->
+                <div class="space-y-6">
+                    <div class="card-light rounded-2xl p-5">
+                        <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2" id="lbl-trend-chart-title">1時間当り仕上m数 [m/h]</div>
+                        <div id="chart-trend-main" class="min-h-[380px]"></div>
+                    </div>
+
+                    <div class="card-light rounded-2xl p-5">
+                        <div class="text-sm font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">月次データ一覧</div>
+                        <div class="overflow-x-auto">
+                            <table id="tbl-trend-data" class="text-xs">
+                                <thead>
+                                    <!-- Dynamic month headers -->
+                                    <tr id="tbl-trend-hdr-row">
+                                        <th>指標項目</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr id="tbl-trend-val-row">
+                                        <td class="font-bold text-slate-700">実績値</td>
+                                    </tr>
+                                    <tr id="tbl-trend-tgt-row">
+                                        <td class="font-bold text-slate-700">目標値</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- UI State Logic & API interactions -->
+    <script>
+        let currentTab = 'summary';
+        let currentTrendMetric = '生産性';
+        let selectedMachines = [];
+        let visibleMachines = [];
+        let allFilterOptions = null;
+        
+        // ApexCharts references to destroy/recreate cleanly
+        const chartInstances = {};
+
+        let currentAnalysisSubView = 'customer';
+
+        function switchTab(tabId) {
+            if (tabId === 'analysis') {
+                switchAnalysisView(currentAnalysisSubView);
+                return;
+            }
+
+            // Update tabs UI
+            document.querySelectorAll('nav button, nav .relative button').forEach(btn => {
+                btn.className = 'inactive-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150';
+            });
+            document.getElementById(`tab-btn-${tabId}`).className = 'active-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150 shadow-sm';
+            
+            // Hide all sections
+            document.getElementById('view-summary').classList.add('hidden');
+            document.getElementById('view-analysis').classList.add('hidden');
+            document.getElementById('view-daily').classList.add('hidden');
+            document.getElementById('view-trend').classList.add('hidden');
+            
+            // Show target section
+            document.getElementById(`view-${tabId}`).classList.remove('hidden');
+            currentTab = tabId;
+            
+            document.getElementById('tab-btn-analysis').innerHTML = `<i class="fa-solid fa-magnifying-glass-chart mr-1.5"></i>生産性寄与度分析 <i class="fa-solid fa-chevron-down text-[9px] text-slate-400"></i>`;
+            
+            loadTab(tabId);
+        }
+
+        function switchAnalysisView(subView) {
+            currentAnalysisSubView = subView;
+            
+            // Highlight analysis tab UI directly (avoid loop recursion calling switchTab)
+            document.querySelectorAll('nav button, nav .relative button').forEach(btn => {
+                btn.className = 'inactive-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150';
+            });
+            document.getElementById('tab-btn-analysis').className = 'active-tab px-4 py-2 text-xs font-bold rounded-lg transition duration-150 shadow-sm';
+            
+            // Toggle main tab section visibility
+            document.getElementById('view-summary').classList.add('hidden');
+            document.getElementById('view-analysis').classList.remove('hidden');
+            document.getElementById('view-daily').classList.add('hidden');
+            document.getElementById('view-trend').classList.add('hidden');
+            
+            currentTab = 'analysis';
+            
+            // Hide/Show sub-sections
+            if (subView === 'customer') {
+                document.getElementById('analysis-sub-customer').classList.remove('hidden');
+                document.getElementById('analysis-sub-others').classList.add('hidden');
+                document.getElementById('lbl-analysis-title').innerText = '🔍 分析 – 得意先生産性寄与度分析';
+                document.getElementById('tab-btn-analysis').innerHTML = `<i class="fa-solid fa-magnifying-glass-chart mr-1.5"></i>得意先分析 <i class="fa-solid fa-chevron-down text-[9px] text-slate-400"></i>`;
+            } else {
+                document.getElementById('analysis-sub-customer').classList.add('hidden');
+                document.getElementById('analysis-sub-others').classList.remove('hidden');
+                document.getElementById('lbl-analysis-title').innerText = '🔍 分析 – その他要因・属性分析';
+                document.getElementById('tab-btn-analysis').innerHTML = `<i class="fa-solid fa-chart-line mr-1.5"></i>その他分析 <i class="fa-solid fa-chevron-down text-[9px] text-slate-400"></i>`;
+            }
+            
+            loadTab('analysis');
+        }
+
+        function switchTrendMetric(metric) {
+            document.querySelectorAll('[id^="btn-trend-metric-"]').forEach(btn => {
+                btn.className = 'bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150';
+            });
+            document.getElementById(`btn-trend-metric-${metric}`).className = 'bg-[#0d9488] text-white font-bold px-4 py-1.5 rounded-lg text-xs transition duration-150';
+            
+            const labels = {
+                '生産性': '1時間当り仕上m数 [m/h]',
+                '仕上m': '仕上m（仕上+要検品）[m]',
+                '所要時間h': '所要時間[h]',
+                '稼働率': '稼働率 (%)',
+                'LSP': 'LS/分',
+                '段取時間件': '段取り時間/件 [分]'
+            };
+            document.getElementById('lbl-trend-chart-title').innerText = labels[metric];
+            currentTrendMetric = metric;
+            loadTrendData();
+        }
+
+        function getFilterParams() {
+            const factory = document.getElementById('filter-factory').value;
+            const kakouki = document.getElementById('filter-kakouki').value;
+            const taisho = document.getElementById('filter-taisho').value;
+            const kubun = document.getElementById('filter-kubun').value;
+            
+            let query = `factory=${encodeURIComponent(factory)}`;
+            if (kakouki !== '全て') query += `&kakouki=${kakouki}`;
+            if (taisho !== '全て') query += `&taisho=${taisho}`;
+            if (kubun !== '全て') query += `&kubun=${encodeURIComponent(kubun)}`;
+            
+            if (selectedMachines.length > 0) {
+                query += `&machines=${encodeURIComponent(selectedMachines.join(','))}`;
+            }
+            return query;
+        }
+
+        function onFilterChange() {
+            showLoader();
+            
+            // Reset dedicated others customer searchable dropdown to prevent stale parameters
+            window.selectedOthersCustomer = '全て';
+            const displayEl = document.getElementById('filter-others-customer-display');
+            if (displayEl) {
+                displayEl.querySelector('span').innerText = '全て';
+            }
+            const oContainer = document.getElementById('others-customer-options-container');
+            if (oContainer) {
+                oContainer.innerHTML = '';
+            }
+            
+            const factory = document.getElementById('filter-factory').value;
+            const kakouki = document.getElementById('filter-kakouki').value;
+            const taisho = document.getElementById('filter-taisho').value;
+            const kubun = document.getElementById('filter-kubun').value;
+            
+            let url = `/api/dashboard/filters?factory=${encodeURIComponent(factory)}`;
+            if (kakouki !== '全て') url += `&kakouki=${kakouki}`;
+            if (taisho !== '全て') url += `&taisho=${taisho}`;
+            if (kubun !== '全て') url += `&kubun=${encodeURIComponent(kubun)}`;
+            
+            logStep('Filters changed. Fetching options from: ' + url);
+            fetch(url)
+                .then(res => {
+                    logStep('Filters fetch returned status: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    logStep('Filters fetch successfully completed. Rendering machine checkboxes...');
+                    renderMachineCheckboxes(data.machines);
+                    loadTab(currentTab);
+                })
+                .catch(err => {
+                    logStep('Filters fetch failed: ' + err);
+                });
+        }
+
+         function resetFilters() {
+            document.getElementById('filter-factory').value = '全工場';
+            document.getElementById('filter-kakouki').value = '全て';
+            document.getElementById('filter-taisho').value = '全て';
+            document.getElementById('filter-kubun').value = '全て';
+            selectedMachines = [];
+            onFilterChange();
+        }
+
+        function selectAllMachines() {
+            selectedMachines = [...new Set([...selectedMachines, ...visibleMachines])];
+            renderMachineCheckboxes(visibleMachines);
+            loadTab(currentTab);
+        }
+
+        function clearAllMachines() {
+            selectedMachines = selectedMachines.filter(m => !visibleMachines.includes(m));
+            renderMachineCheckboxes(visibleMachines);
+            loadTab(currentTab);
+        }
+
+        function fetchFilters() {
+            logStep('fetchFilters starting request to /api/dashboard/filters');
+            showLoader();
+            return fetch('/api/dashboard/filters')
+                .then(res => {
+                    logStep('fetchFilters response status: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    logStep('fetchFilters response parsed successfully.');
+                    allFilterOptions = data;
+                    document.getElementById('last-updated-ts').innerText = data.last_updated;
+                    
+                    // Populate factory dropdown
+                    const factorySelect = document.getElementById('filter-factory');
+                    factorySelect.innerHTML = '';
+                    data.factories.forEach(fac => {
+                        const opt = document.createElement('option');
+                        opt.value = fac;
+                        opt.innerText = fac;
+                        factorySelect.appendChild(opt);
+                    });
+                    
+                    renderMachineCheckboxes(data.machines);
+                });
+        }
+
+        function renderMachineCheckboxes(machines) {
+            const container = document.getElementById('machines-container');
+            container.innerHTML = '';
+            visibleMachines = machines;
+            
+            if (machines.length === 0) {
+                container.innerHTML = '<span class="text-xs text-slate-400">該当する機台はありません</span>';
+                return;
+            }
+            
+            machines.forEach(mach => {
+                const id = `chk-mach-${mach}`;
+                const div = document.createElement('div');
+                div.className = 'flex items-center gap-2';
+                
+                const chk = document.createElement('input');
+                chk.type = 'checkbox';
+                chk.id = id;
+                chk.value = mach;
+                chk.checked = selectedMachines.includes(mach);
+                chk.className = 'rounded border-slate-300 text-[#0d9488] focus:ring-[#0d9488] bg-white';
+                chk.addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        selectedMachines.push(mach);
+                    } else {
+                        selectedMachines = selectedMachines.filter(m => m !== mach);
+                    }
+                    loadTab(currentTab);
+                });
+                
+                const lbl = document.createElement('label');
+                lbl.htmlFor = id;
+                lbl.innerText = mach;
+                lbl.className = 'text-xs text-slate-700 cursor-pointer select-none';
+                
+                div.appendChild(chk);
+                div.appendChild(lbl);
+                container.appendChild(div);
+            });
+        }
+
+        function showLoader() {
+            document.getElementById('loader').classList.remove('hidden');
+        }
+
+        function hideLoader() {
+            document.getElementById('loader').classList.add('hidden');
+        }
+
+        function loadTab(tabId) {
+            logStep('loadTab called for: ' + tabId);
+            showLoader();
+            if (tabId === 'summary') {
+                loadSummaryData();
+            } else if (tabId === 'analysis') {
+                loadAnalysisData();
+            } else if (tabId === 'daily') {
+                loadDailyData();
+            } else if (tabId === 'trend') {
+                loadTrendData();
+            }
+        }
+
+        // ==========================================
+        // VIEW 1: 一覧 (Summary)
+        // ==========================================
+        function loadSummaryData() {
+            const url = `/api/dashboard/summary?${getFilterParams()}`;
+            logStep('loadSummaryData calling: ' + url);
+            fetch(url)
+                .then(res => {
+                    logStep('loadSummaryData response status: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    logStep('loadSummaryData JSON parsed successfully. Updating layouts...');
+                    
+                    // Update header month info
+                    document.getElementById('header-report-ym').innerText = `対象月: ${formatMonthLabel(data.report_ym)}`;
+                    
+                    // Render KPI Cards
+                    renderSummaryKPICards(data.kpis);
+                    
+                    // Draw Line Charts
+                    drawSummaryCharts(data.trend, data.multi_machine);
+                    
+                    // Draw Heatmap
+                    drawHeatmapChart(data.heatmap, data.heatmap_metrics);
+                    
+                    logStep('loadSummaryData rendering completed.');
+                    hideLoader();
+                })
+                .catch(err => {
+                    logStep('loadSummaryData failed: ' + err);
+                });
+        }
+
+        function formatMonthLabel(ym) {
+            return ym || '';
+        }
+
+        function renderSummaryKPICards(kpis) {
+            const container = document.getElementById('summary-kpis');
+            container.innerHTML = '';
+            
+            const defs = [
+                { label: '1時間当たり仕上m', key: '生産性', fmt: v => v.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1}), unit: '', isPct: false, isLowerBetter: false },
+                { label: '仕上m数', key: '仕上m', fmt: v => Math.round(v).toLocaleString(), unit: '', isPct: false, isLowerBetter: false },
+                { label: '平均ロット数 [m]', key: '平均ロット数', fmt: v => Math.round(v).toLocaleString(), unit: '', isPct: false, isLowerBetter: false },
+                { label: '稼働率 [%]', key: '稼働率', fmt: v => (v * 100).toFixed(1), unit: '', isPct: true, isLowerBetter: false },
+                { label: '稼働時間 [h]', key: '稼働時間h', fmt: v => Math.round(v).toLocaleString(), unit: '', isPct: false, isLowerBetter: false },
+                { label: '段取り時間 [分/件]', key: '段取時間件', fmt: v => v.toFixed(2), unit: '', isPct: false, isLowerBetter: true },
+                { label: '通し数 [m]', key: '通し数', fmt: v => v ? Math.round(v).toLocaleString() : '－', unit: '', isPct: false, isLowerBetter: false }
+            ];
+            
+            defs.forEach(d => {
+                const currVal = kpis.current[d.key];
+                const prevVal = kpis.previous[d.key];
+                const yoyVal  = kpis.yoy[d.key];
+                
+                const valStr = currVal !== null && currVal !== undefined ? d.fmt(currVal) + d.unit : '－';
+                const prevStr = prevVal !== null && prevVal !== undefined ? d.fmt(prevVal) + d.unit : '－';
+                const yoyStr = yoyVal !== null && yoyVal !== undefined ? d.fmt(yoyVal) + d.unit : '－';
+                
+                const prevDelta = getDeltaHtml(currVal, prevVal, d.isPct, d.isLowerBetter);
+                const yoyDelta = getDeltaHtml(currVal, yoyVal, d.isPct, d.isLowerBetter);
+                
+                const card = document.createElement('div');
+                card.className = 'card-light rounded-xl p-3 flex flex-col justify-between space-y-2 text-center hover:scale-[1.02] transition duration-200';
+                card.innerHTML = `
+                    <div class="text-[9px] text-slate-500 font-bold tracking-wide uppercase">${d.label}</div>
+                    <div class="text-lg font-extrabold text-[#0d9488]">${valStr}</div>
+                    <div class="text-[9px] text-slate-400 border-t border-slate-100 pt-1.5 flex flex-col space-y-1">
+                        <div class="flex justify-between w-full">
+                            <span>前月: ${prevStr}</span>
+                            <span>${prevDelta}</span>
+                        </div>
+                        <div class="flex justify-between w-full border-t border-slate-50 pt-1">
+                            <span>前年: ${yoyStr}</span>
+                            <span>${yoyDelta}</span>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function getDeltaHtml(curr, ref, isPct, isLowerBetter = false) {
+            if (curr === null || ref === null || !ref) return '<span class="text-slate-400">－</span>';
+            let delta = 0;
+            let display = '';
+            
+            if (isPct) {
+                delta = (curr - ref) * 100;
+                display = `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)}pp`;
+            } else {
+                delta = ((curr - ref) / Math.abs(ref)) * 100;
+                display = `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)}%`;
+            }
+            
+            const isGood = isLowerBetter ? delta <= 0 : delta >= 0;
+            const color = isGood ? '#10b981' : '#ef4444'; // emerald-500 vs red-500
+
+            return `<span style="color: ${color}; font-weight: 700;">${display}</span>`;
+        }
+
+        function drawSummaryCharts(trend, multiMachine) {
+            let categories = [];
+            let seriesProd = [];
+            let seriesLsp = [];
+            let seriesLot = [];
+            
+            if (multiMachine) {
+                const machs = [...new Set(trend.map(t => t.machine))];
+                categories = [...new Set(trend.map(t => formatMonthLabel(t.month)))];
+                
+                seriesProd = machs.map(m => ({
+                    name: m,
+                    data: categories.map(c => {
+                        const pt = trend.find(t => formatMonthLabel(t.month) === c && t.machine === m);
+                        return pt ? pt.生産性 : null;
+                    })
+                }));
+                seriesLsp = machs.map(m => ({
+                    name: m,
+                    data: categories.map(c => {
+                        const pt = trend.find(t => formatMonthLabel(t.month) === c && t.machine === m);
+                        return pt ? pt.LSP : null;
+                    })
+                }));
+                seriesLot = machs.map(m => ({
+                    name: m,
+                    data: categories.map(c => {
+                        const pt = trend.find(t => formatMonthLabel(t.month) === c && t.machine === m);
+                        return pt ? pt.ロット数 : null;
+                    })
+                }));
+            } else {
+                categories = trend.map(t => formatMonthLabel(t.month));
+                seriesProd = [{ name: '生産性', data: trend.map(t => t.生産性) }];
+                seriesLsp = [{ name: 'LSP', data: trend.map(t => t.LSP) }];
+                seriesLot = [{ name: 'ロット数', data: trend.map(t => t.ロット数) }];
+            }
+            
+            const baseOptions = {
+                chart: { type: 'line', height: 260, toolbar: { show: false }, background: 'transparent' },
+                theme: { mode: 'light' },
+                stroke: { width: 3, curve: 'smooth' },
+                markers: { size: 4 },
+                xaxis: { categories: categories, axisBorder: { show: false } },
+                grid: { borderColor: '#f1f5f9' },
+                colors: ['#0d9488', '#10b981', '#f59e0b', '#3b82f6', '#ef4444']
+            };
+            
+            renderApexChart('chart-summary-productivity', { 
+                ...baseOptions, 
+                series: seriesProd,
+                yaxis: { labels: { formatter: v => v !== null && v !== undefined ? v.toFixed(0) : '' } },
+                tooltip: { y: { formatter: v => v !== null && v !== undefined ? v.toFixed(1) : '' } }
+            });
+            renderApexChart('chart-summary-lsp', { 
+                ...baseOptions, 
+                series: seriesLsp,
+                yaxis: { labels: { formatter: v => v !== null && v !== undefined ? v.toFixed(0) : '' } },
+                tooltip: { y: { formatter: v => v !== null && v !== undefined ? v.toFixed(2) : '' } }
+            });
+            renderApexChart('chart-summary-lot', { 
+                ...baseOptions, 
+                series: seriesLot,
+                yaxis: { labels: { formatter: v => v !== null && v !== undefined ? v.toFixed(0) : '' } },
+                tooltip: { y: { formatter: v => v !== null && v !== undefined ? v.toFixed(0) : '' } }
+            });
+        }
+
+        function drawHeatmapChart(heatmap, metrics) {
+            const series = [...metrics].reverse().map(m => {
+                // Find min/max for this row to normalize colors independently
+                const vals = heatmap.map(h => h[m]).filter(v => v !== null && v !== undefined);
+                const minVal = vals.length > 0 ? Math.min(...vals) : 0;
+                const maxVal = vals.length > 0 ? Math.max(...vals) : 0;
+                
+                return {
+                    name: m,
+                    data: heatmap.map(h => {
+                        const raw = h[m];
+                        let normalized = 0;
+                        if (raw !== null && raw !== undefined) {
+                            if (maxVal > minVal) {
+                                normalized = ((raw - minVal) / (maxVal - minVal)) * 100;
+                            } else {
+                                normalized = 50; // middle shade if all values are equal
+                            }
+                        } else {
+                            normalized = null;
+                        }
+                        
+                        let displayStr = '－';
+                        if (raw !== null && raw !== undefined) {
+                            if (m === '平均LSP') {
+                                displayStr = raw.toFixed(2);
+                            } else if (m.includes('[h]')) {
+                                displayStr = raw.toFixed(1);
+                            } else {
+                                displayStr = Math.round(raw).toLocaleString();
+                            }
+                        }
+                        
+                        return {
+                            x: formatMonthLabel(h.month),
+                            y: normalized,
+                            rawVal: displayStr
+                        };
+                    })
+                };
+            });
+            
+            const options = {
+                chart: { type: 'heatmap', height: 260, toolbar: { show: false }, background: 'transparent' },
+                theme: { mode: 'light' },
+                series: series,
+                colors: ['#0d9488'],
+                xaxis: {
+                    position: 'top',
+                    axisBorder: { show: false },
+                    axisTicks: { show: false }
+                },
+                plotOptions: {
+                    heatmap: {
+                        // Let ApexCharts shade relative to normalized 0-100 values
+                    }
+                },
+                dataLabels: { 
+                    enabled: true, 
+                    formatter: function(val, opts) {
+                        const pt = opts.w.config.series[opts.seriesIndex].data[opts.dataPointIndex];
+                        return pt ? pt.rawVal : '';
+                    },
+                    style: { colors: ['#334155'] } 
+                },
+                tooltip: {
+                    y: {
+                        formatter: function(val, opts) {
+                            const pt = opts.w.config.series[opts.seriesIndex].data[opts.dataPointIndex];
+                            return pt ? pt.rawVal : '';
+                        }
+                    }
+                },
+                grid: { show: false }
+            };
+            
+            renderApexChart('chart-summary-heatmap', options);
+        }
+
+        // ==========================================
+        // VIEW 2: 分析 (Analysis)
+        // ==========================================
+        // Global selected customer value for the others page
+        window.selectedOthersCustomer = '全て';
+
+        function loadAnalysisData() {
+            const othersCust = window.selectedOthersCustomer || '全て';
+            
+            const url = `/api/dashboard/analysis?${getFilterParams()}&others_customer=${encodeURIComponent(othersCust)}`;
+            logStep('loadAnalysisData calling: ' + url);
+            fetch(url)
+                .then(res => {
+                    logStep('loadAnalysisData response status: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    logStep('loadAnalysisData JSON parsed successfully. Rendering items...');
+                    document.getElementById('header-report-ym').innerText = `対象月: ${formatMonthLabel(data.report_ym)}`;
+                    document.getElementById('lbl-cust-detail-comparison').innerText = `得意先別詳細 比較分析 (${formatMonthLabel(data.report_ym)} vs ${formatMonthLabel(data.prev_ym)})`;
+
+                    window.lastCustomerContrib = data.customer_contrib || [];
+                    window.lastCurrList = data.customer_detail_curr || [];
+                    window.lastPrevList = data.customer_detail_prev || [];
+
+                    drawWaterfallChart(data.waterfall);
+                    
+                    // Trigger rendering with current sort settings (passing current sort asc state to prevent toggling on reload)
+                    sortContribTable(currentContribSortCol, currentContribSortAsc);
+                    sortComparisonTable(currentComparisonSortCol, currentComparisonSortAsc);
+                    
+                    drawRollLengthChart(data.maki_dist);
+                    
+                    document.getElementById('lbl-yoto-curr').innerText = `当月 ${formatMonthLabel(data.report_ym)}`;
+                    document.getElementById('lbl-yoto-prev').innerText = `前月 ${formatMonthLabel(data.prev_ym)}`;
+                    drawUsagePieCharts(data.yoto_curr, data.yoto_prev, data.total_jobs_curr, data.total_jobs_prev);
+                    drawClassificationTrendChart(data.classification_trend);
+                    
+                    // Populate dedicated customer searchable dropdown options list ONLY if it is not populated
+                    const oContainer = document.getElementById('others-customer-options-container');
+                    if (oContainer && oContainer.children.length <= 1) {
+                        oContainer.innerHTML = `
+                            <div onclick="selectOthersCustomerOption('全て')" data-value="全て" class="px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-[#0d9488] font-semibold rounded-lg cursor-pointer transition">全て</div>
+                        `;
+                        const sortedCusts = [...new Set(data.customer_contrib.map(c => c.customer))].sort();
+                        sortedCusts.forEach(c => {
+                            const div = document.createElement('div');
+                            div.setAttribute('data-value', c);
+                            div.className = 'px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-[#0d9488] font-semibold rounded-lg cursor-pointer transition';
+                            div.innerText = c;
+                            div.onclick = function() { selectOthersCustomerOption(c); };
+                            oContainer.appendChild(div);
+                        });
+                    }
+                    
+                    // Automatically select first customer for trend analysis
+                    if (window.lastCustomerContrib.length > 0) {
+                        selectCustomerForTrend(window.lastCustomerContrib[0].customer);
+                    } else {
+                        drawCustomerTrendComboCharts([]);
+                    }
+                    
+                    logStep('loadAnalysisData completed.');
+                    hideLoader();
+                })
+                .catch(err => {
+                    logStep('loadAnalysisData failed: ' + err);
+                });
+        }
+
+        function drawWaterfallChart(wf) {
+            const prev = wf.prev_prod !== null && wf.prev_prod !== undefined ? parseFloat(wf.prev_prod.toFixed(1)) : 0;
+            const noryoku = wf.noryoku !== null && wf.noryoku !== undefined ? parseFloat(wf.noryoku.toFixed(1)) : 0;
+            const kosei = wf.kosei !== null && wf.kosei !== undefined ? parseFloat(wf.kosei.toFixed(1)) : 0;
+            const curr = wf.curr_prod !== null && wf.curr_prod !== undefined ? parseFloat(wf.curr_prod.toFixed(1)) : 0;
+            
+            const level1 = parseFloat((prev + noryoku).toFixed(1));
+            const level2 = parseFloat((level1 + kosei).toFixed(1));
+            
+            // Calculate stacked waterfall values
+            let offset_noryoku = 0, inc_noryoku = 0, dec_noryoku = 0;
+            if (noryoku >= 0) {
+                offset_noryoku = prev;
+                inc_noryoku = noryoku;
+            } else {
+                offset_noryoku = level1;
+                dec_noryoku = Math.abs(noryoku);
+            }
+            
+            let offset_kosei = 0, inc_kosei = 0, dec_kosei = 0;
+            if (kosei >= 0) {
+                offset_kosei = level1;
+                inc_kosei = kosei;
+            } else {
+                offset_kosei = level2;
+                dec_kosei = Math.abs(kosei);
+            }
+
+            // Calculate dynamic Y-axis bounds to zoom in on the difference bars
+            const allVals = [prev, curr, level1, level2].filter(v => v > 0);
+            const minBound = Math.min(...allVals);
+            const maxBound = Math.max(...allVals);
+            const diff = maxBound - minBound;
+            const pad = diff > 0 ? diff * 0.4 : prev * 0.1;
+            const yMin = Math.max(0, Math.floor((minBound - pad) / 50) * 50);
+            const yMax = Math.ceil((maxBound + pad) / 50) * 50;
+            
+            const options = {
+                chart: { 
+                    type: 'bar', 
+                    height: 350, 
+                    stacked: true, 
+                    toolbar: { show: false }, 
+                    background: 'transparent' 
+                },
+                theme: { mode: 'light' },
+                series: [
+                    {
+                        name: '補助',
+                        data: [0, offset_noryoku, offset_kosei, 0]
+                    },
+                    {
+                        name: '低下',
+                        data: [0, dec_noryoku, dec_kosei, 0]
+                    },
+                    {
+                        name: '上昇',
+                        data: [0, inc_noryoku, inc_kosei, 0]
+                    },
+                    {
+                        name: '実績',
+                        data: [prev, 0, 0, curr]
+                    }
+                ],
+                colors: ['transparent', '#ef4444', '#10b981', '#0d9488'], // transparent offset, red decline, green growth, teal totals
+                plotOptions: {
+                    bar: {
+                        columnWidth: '60%',
+                        dataLabels: {
+                            position: 'top',
+                            hideOverflowingLabels: false
+                        }
+                    }
+                },
+                dataLabels: {
+                    enabled: true,
+                    formatter: function(val, opt) {
+                        if (val === 0) return '';
+                        const seriesIndex = opt.seriesIndex;
+                        if (seriesIndex === 1) { // Decline
+                            return '-' + val.toLocaleString(undefined, {maximumFractionDigits:1});
+                        }
+                        if (seriesIndex === 2) { // Increase
+                            return '+' + val.toLocaleString(undefined, {maximumFractionDigits:1});
+                        }
+                        if (seriesIndex === 3) { // Total
+                            return val.toLocaleString(undefined, {maximumFractionDigits:1});
+                        }
+                        return '';
+                    },
+                    offsetY: -20,
+                    style: {
+                        colors: ['#475569'],
+                        fontSize: '11px',
+                        fontWeight: 'bold'
+                    }
+                },
+                grid: { borderColor: '#f1f5f9' },
+                xaxis: {
+                    categories: ['前月生産性', '能率差異', '構成差異', '当月生産性']
+                },
+                yaxis: {
+                    min: yMin,
+                    max: yMax,
+                    labels: {
+                        formatter: function(val) {
+                            return val.toFixed(0);
+                        }
+                    }
+                },
+                legend: {
+                    show: false
+                },
+                tooltip: {
+                    custom: function({ series, seriesIndex, dataPointIndex, w }) {
+                        const categories = ['前月生産性', '能率差異', '構成差異', '当月生産性'];
+                        const name = categories[dataPointIndex];
+                        if (dataPointIndex === 0) {
+                            return `<div class="p-2 text-xs font-semibold bg-white border border-slate-200 rounded shadow-sm text-slate-700">
+                                <strong>${name}</strong>: <span class="text-[#0d9488]">${prev.toFixed(1)} m/h</span>
+                            </div>`;
+                        } else if (dataPointIndex === 3) {
+                            return `<div class="p-2 text-xs font-semibold bg-white border border-slate-200 rounded shadow-sm text-slate-700">
+                                <strong>${name}</strong>: <span class="text-[#0d9488]">${curr.toFixed(1)} m/h</span>
+                            </div>`;
+                        } else {
+                            const val = dataPointIndex === 1 ? noryoku : kosei;
+                            const start = dataPointIndex === 1 ? prev : level1;
+                            const end = dataPointIndex === 1 ? level1 : level2;
+                            return `<div class="p-2 text-xs font-semibold bg-white border border-slate-200 rounded shadow-sm text-slate-700">
+                                <strong>${name}</strong><br/>
+                                遷移: ${start.toFixed(1)} → ${end.toFixed(1)}<br/>
+                                差異: <span style="color: ${val >= 0 ? '#10b981' : '#ef4444'}">${val >= 0 ? '+' : ''}${val.toFixed(1)} m/h</span>
+                            </div>`;
+                        }
+                    }
+                }
+            };
+            renderApexChart('chart-analysis-waterfall', options);
+        }
+
+        function renderCustomerContribTable(contrib, skipResetState = false) {
+            const table = document.getElementById('tbl-customer-contrib');
+            const tbody = table.querySelector('tbody');
+            tbody.innerHTML = '';
+            
+            // Clean old tfoot if exists
+            let oldTfoot = table.querySelector('tfoot');
+            if (oldTfoot) oldTfoot.remove();
+            
+            if (contrib.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-slate-400">データがありません</td></tr>';
+                return;
+            }
+            
+            let totalContrib = 0;
+            let totalNoryoku = 0;
+            let totalKosei = 0;
+            
+            const fmt = v => {
+                if (v === 0) return '0.00';
+                const prefix = v > 0 ? '+' : '';
+                return prefix + v.toFixed(2);
+            };
+            
+            contrib.forEach(c => {
+                totalContrib += c.contrib;
+                totalNoryoku += c.noryoku;
+                totalKosei += c.kosei;
+                
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50/50 transition';
+                tr.innerHTML = `
+                    <td class="font-medium text-slate-700 truncate max-w-[200px]" title="${c.customer}">
+                        <span class="cursor-pointer text-[#0d9488] hover:underline font-bold" onclick="selectCustomerForTrend('${c.customer.replace(/'/g, "\\'")}')">${c.customer}</span>
+                    </td>
+                    <td class="font-bold" style="color: ${c.contrib > 0 ? '#10b981' : (c.contrib < 0 ? '#ef4444' : '#64748b')}">${fmt(c.contrib)}</td>
+                    <td class="font-semibold" style="color: ${c.noryoku > 0 ? '#10b981' : (c.noryoku < 0 ? '#ef4444' : '#64748b')}">${fmt(c.noryoku)}</td>
+                    <td class="font-semibold" style="color: ${c.kosei > 0 ? '#10b981' : (c.kosei < 0 ? '#ef4444' : '#64748b')}">${fmt(c.kosei)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+            
+            // Append Grand Total Row dynamically in tfoot
+            const tfoot = document.createElement('tfoot');
+            tfoot.innerHTML = `
+                <tr class="font-bold border-t-2 border-slate-300" style="position: sticky; bottom: 0; background-color: #f8fafc; z-index: 10;">
+                    <td class="text-slate-800">合計</td>
+                    <td style="color: ${totalContrib > 0 ? '#10b981' : (totalContrib < 0 ? '#ef4444' : '#64748b')}">${fmt(totalContrib)}</td>
+                    <td style="color: ${totalNoryoku > 0 ? '#10b981' : (totalNoryoku < 0 ? '#ef4444' : '#64748b')}">${fmt(totalNoryoku)}</td>
+                    <td style="color: ${totalKosei > 0 ? '#10b981' : (totalKosei < 0 ? '#ef4444' : '#64748b')}">${fmt(totalKosei)}</td>
+                </tr>
+            `;
+            table.appendChild(tfoot);
+        }
+
+        function renderCustomerComparisonTable(currList, prevList, customerContrib, skipResetState = false) {
+            const tbody = document.querySelector('#tbl-customer-comparison tbody');
+            tbody.innerHTML = '';
+            
+            const prevMap = {};
+            prevList.forEach(p => {
+                prevMap[p.得意先] = p;
+            });
+            
+            const getContrib = cust => {
+                const found = customerContrib.find(c => c.customer === cust);
+                return found ? found.contrib : 0;
+            };
+            
+            const allCustomers = [...new Set([
+                ...currList.map(c => c.得意先),
+                ...prevList.map(p => p.得意先)
+            ])];
+            
+            // Sort dynamically based on chosen column
+            const col = currentComparisonSortCol;
+            allCustomers.sort((a, b) => {
+                const getVal = cust => {
+                    if (col === 'customer') return cust;
+                    if (col === 'contrib') return getContrib(cust);
+                    
+                    const curr = currList.find(c => c.得意先 === cust);
+                    return curr ? curr[col] : -99999999;
+                };
+                
+                let valA = getVal(a);
+                let valB = getVal(b);
+                if (col === 'customer') {
+                    return currentComparisonSortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                }
+                return currentComparisonSortAsc ? valA - valB : valB - valA;
+            });
+            
+            if (allCustomers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-400">データがありません</td></tr>';
+                return;
+            }
+            
+            allCustomers.forEach(cust => {
+                const curr = currList.find(c => c.得意先 === cust) || null;
+                const prev = prevMap[cust] || null;
+                
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-slate-50/50 transition';
+                
+                const custTd = `<td class="font-bold text-slate-700 max-w-[220px] truncate" title="${cust}">
+                    <span class="cursor-pointer text-[#0d9488] hover:underline font-bold" onclick="selectCustomerForTrend('${cust.replace(/'/g, "\\'")}')">${cust}</span>
+                </td>`;
+                
+                const getMetricTd = (currVal, prevVal, formatFn, isLowerBetter = false) => {
+                    if (currVal === null || currVal === undefined) {
+                        const prevStr = prevVal !== null && prevVal !== undefined ? formatFn(prevVal) : '－';
+                        return `<td class="text-slate-400">－ <span class="text-[10px] block text-slate-300">前月: ${prevStr}</span></td>`;
+                    }
+                    const currStr = formatFn(currVal);
+                    if (prevVal === null || prevVal === undefined) {
+                        return `<td><span class="font-semibold text-slate-800">${currStr}</span> <span class="text-slate-400 text-[10px] block">前月: －</span></td>`;
+                    }
+                    
+                    const diff = currVal - prevVal;
+                    const pct = prevVal !== 0 ? (diff / Math.abs(prevVal)) * 100 : 0;
+                    
+                    const isPositive = diff > 0;
+                    const isGood = isLowerBetter ? !isPositive : isPositive;
+                    const color = diff === 0 ? 'text-slate-400' : (isGood ? 'text-emerald-500' : 'text-rose-500');
+                    const arrow = diff === 0 ? '→' : (isGood ? '▲' : '▼');
+                    
+                    return `
+                        <td>
+                            <span class="font-semibold text-slate-800">${currStr}</span>
+                            <span class="${color} text-[10px] block font-bold">
+                                ${arrow} ${Math.abs(diff).toFixed(1)} (${isPositive ? '+' : ''}${pct.toFixed(1)}%)
+                            </span>
+                        </td>
+                    `;
+                };
+                
+                const prodTd = getMetricTd(
+                    curr ? curr.仕上m_h : null, 
+                    prev ? prev.仕上m_h : null, 
+                    v => v.toLocaleString(undefined, {maximumFractionDigits:1})
+                );
+                
+                const hourTd = getMetricTd(
+                    curr ? curr.所要時間_pct : null, 
+                    prev ? prev.所要時間_pct : null, 
+                    v => v.toFixed(1) + '%'
+                );
+                
+                const lotTd = getMetricTd(
+                    curr ? curr.ロット数 : null, 
+                    prev ? prev.ロット数 : null, 
+                    v => Math.round(v).toLocaleString()
+                );
+                
+                const lspTd = getMetricTd(
+                    curr ? curr.LSP : null, 
+                    prev ? prev.LSP : null, 
+                    v => v.toFixed(2)
+                );
+                
+                const setupTd = getMetricTd(
+                    curr ? curr.段取時間 : null, 
+                    prev ? prev.段取時間 : null, 
+                    v => v.toFixed(1),
+                    true
+                );
+                
+                let countTd = '';
+                if (curr) {
+                    const prevStr = prev ? `${prev.生産件数}件 (${prev.生産件数_pct}%)` : '－';
+                    countTd = `
+                        <td>
+                            <span class="font-semibold text-slate-800">${curr.生産件数}件 (${curr.生産件数_pct}%)</span>
+                            <span class="text-slate-400 text-[10px] block">前月: ${prevStr}</span>
+                        </td>
+                    `;
+                } else {
+                    countTd = `<td class="text-slate-400">－ <span class="text-[10px] block text-slate-300">前月: ${prev.生産件数}件</span></td>`;
+                }
+                
+                tr.innerHTML = custTd + prodTd + hourTd + lotTd + lspTd + setupTd + countTd;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function drawRollLengthChart(dist) {
+            const categories = dist.map(d => d.bin);
+            const values = dist.map(d => d.change);
+            
+            const options = {
+                chart: { type: 'bar', height: 320, toolbar: { show: false }, background: 'transparent' },
+                theme: { mode: 'light' },
+                series: [{
+                    name: '件数増減',
+                    data: values
+                }],
+                plotOptions: {
+                    bar: {
+                        horizontal: true,
+                        colors: {
+                            ranges: [
+                                { from: -100000, to: 0, color: '#ef4444' },
+                                { from: 1, to: 100000, color: '#10b981' }
+                            ]
+                        }
+                    }
+                },
+                xaxis: { categories: categories },
+                grid: { borderColor: '#f1f5f9' }
+            };
+            
+            renderApexChart('chart-analysis-maki-dist', options);
+        }
+
+        function drawUsagePieCharts(currShares, prevShares, totalCurr, totalPrev) {
+            const drawDonut = (elementId, shares, totalVal) => {
+                const labels = shares.map(s => s.用途);
+                const values = shares.map(s => s.件数);
+                
+                const options = {
+                    chart: { type: 'donut', height: 260, background: 'transparent' },
+                    theme: { mode: 'light' },
+                    series: values,
+                    labels: labels,
+                    stroke: { show: false },
+                    colors: ['#0d9488', '#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#ec4899', '#6b7280'],
+                    legend: { position: 'bottom', fontSize: '9px' },
+                    plotOptions: {
+                        pie: {
+                            donut: {
+                                size: '60%',
+                                labels: {
+                                    show: true,
+                                    total: {
+                                        show: true,
+                                        label: '合計',
+                                        formatter: w => {
+                                            return totalVal !== undefined ? totalVal + ' 件' : w.globals.seriesTotals.reduce((a, b) => a + b, 0) + ' 件';
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    dataLabels: { enabled: false }
+                };
+                renderApexChart(elementId, options);
+            };
+            
+            drawDonut('chart-analysis-yoto-curr', currShares, totalCurr);
+            drawDonut('chart-analysis-yoto-prev', prevShares, totalPrev);
+        }
+
+        function drawClassificationTrendChart(dataList) {
+            const categories = dataList.map(d => formatMonthLabel(d.month));
+            const seriesRepeat = dataList.map(d => parseFloat(d.リピート.toFixed(1)));
+            const seriesTest = dataList.map(d => parseFloat(d.テスト.toFixed(1)));
+            
+            const options = {
+                chart: {
+                    type: 'area',
+                    height: 320,
+                    stacked: true,
+                    toolbar: { show: false },
+                    background: 'transparent'
+                },
+                theme: { mode: 'light' },
+                dataLabels: { enabled: false },
+                series: [
+                    { name: 'リピート', data: seriesRepeat },
+                    { name: 'テスト', data: seriesTest }
+                ],
+                xaxis: { categories: categories, axisBorder: { show: false } },
+                yaxis: {
+                    labels: {
+                        formatter: v => v !== null && v !== undefined ? v.toFixed(0) : ''
+                    }
+                },
+                colors: ['#0d9488', '#f59e0b'], // Teal for Repeat, Amber for Test
+                stroke: { curve: 'smooth', width: 2 },
+                fill: {
+                    type: 'gradient',
+                    gradient: {
+                        opacityFrom: 0.5,
+                        opacityTo: 0.1
+                    }
+                },
+                grid: { borderColor: '#f1f5f9' },
+                legend: { position: 'top', horizontalAlign: 'right' }
+            };
+            renderApexChart('chart-analysis-classification-trend', options);
+        }
+
+        // Global variables to store data lists for client-side sorting and interaction
+        window.lastCustomerContrib = [];
+        window.lastCurrList = [];
+        window.lastPrevList = [];
+        
+        let currentContribSortCol = 'contrib';
+        let currentContribSortAsc = true;
+        
+        let currentComparisonSortCol = 'contrib';
+        let currentComparisonSortAsc = true;
+        
+        function updateSortIcons(tableType, activeCol, isAsc) {
+            const cols = tableType === 'contrib' 
+                ? ['customer', 'contrib', 'noryoku', 'kosei']
+                : ['customer', '仕上m_h', '所要時間_pct', 'ロット数', 'LSP', '段取時間', '生産件数'];
+                
+            cols.forEach(col => {
+                const elId = tableType === 'contrib' ? `sort-icon-contrib-${col}` : `sort-icon-comp-${col}`;
+                const el = document.getElementById(elId);
+                if (el) {
+                    if (col === activeCol) {
+                        el.innerText = isAsc ? ' ▲' : ' ▼';
+                        el.className = 'text-[#0d9488] font-bold text-[10px]';
+                    } else {
+                        el.innerText = ' ↕';
+                        el.className = 'text-slate-300 text-[10px]';
+                    }
+                }
+            });
+        }
+        
+        function sortContribTable(col, forceAsc = null) {
+            if (forceAsc !== null) {
+                currentContribSortAsc = forceAsc;
+            } else if (currentContribSortCol === col) {
+                currentContribSortAsc = !currentContribSortAsc;
+            } else {
+                currentContribSortCol = col;
+                currentContribSortAsc = true;
+            }
+            currentContribSortCol = col;
+            
+            const sorted = [...window.lastCustomerContrib].sort((a, b) => {
+                let valA = a[col];
+                let valB = b[col];
+                if (col === 'customer') {
+                    return currentContribSortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                }
+                return currentContribSortAsc ? valA - valB : valB - valA;
+            });
+            
+            renderCustomerContribTable(sorted, true);
+            updateSortIcons('contrib', col, currentContribSortAsc);
+        }
+        
+        function sortComparisonTable(col, forceAsc = null) {
+            if (forceAsc !== null) {
+                currentComparisonSortAsc = forceAsc;
+            } else if (currentComparisonSortCol === col) {
+                currentComparisonSortAsc = !currentComparisonSortAsc;
+            } else {
+                currentComparisonSortCol = col;
+                currentComparisonSortAsc = true;
+            }
+            currentComparisonSortCol = col;
+            
+            renderCustomerComparisonTable(window.lastCurrList, window.lastPrevList, window.lastCustomerContrib, true);
+            updateSortIcons('comp', col, currentComparisonSortAsc);
+        }
+        
+        function selectCustomerForTrend(custName) {
+            document.getElementById('lbl-customer-trend-title').innerText = `得意先個別トレンド分析 (選択: ${custName})`;
+            
+            const url = `/api/dashboard/customer-trend?customer=${encodeURIComponent(custName)}&${getFilterParams()}`;
+            logStep('selectCustomerForTrend calling: ' + url);
+            fetch(url)
+                .then(res => res.json())
+                .then(data => {
+                    drawCustomerTrendComboCharts(data.trend);
+                })
+                .catch(err => {
+                    logStep('selectCustomerForTrend failed: ' + err);
+                });
+        }
+        
+        function drawComboChart(elementId, categories, colName, colData, lineName, lineData, colUnit, lineUnit) {
+            const options = {
+                chart: {
+                    height: 260,
+                    type: 'line',
+                    toolbar: { show: false },
+                    background: 'transparent'
+                },
+                stroke: {
+                    width: [0, 2.5],
+                    curve: 'smooth'
+                },
+                theme: { mode: 'light' },
+                series: [
+                    { name: colName + (colUnit ? ` [${colUnit.trim()}]` : ''), type: 'column', data: colData },
+                    { name: lineName + (lineUnit ? ` [${lineUnit.trim()}]` : ''), type: 'line', data: lineData }
+                ],
+                colors: ['#0d9488', '#f59e0b'],
+                xaxis: { categories: categories, axisBorder: { show: false } },
+                yaxis: [
+                    {
+                        title: { text: colName + (colUnit ? ` [${colUnit.trim()}]` : ''), style: { color: '#0d9488', fontWeight: 'bold' } },
+                        labels: {
+                            formatter: v => v !== null && v !== undefined ? v.toFixed(0) : ''
+                        }
+                    },
+                    {
+                        opposite: true,
+                        title: { text: lineName + (lineUnit ? ` [${lineUnit.trim()}]` : ''), style: { color: '#f59e0b', fontWeight: 'bold' } },
+                        labels: {
+                            formatter: v => v !== null && v !== undefined ? Math.round(v).toLocaleString() : ''
+                        }
+                    }
+                ],
+                grid: { borderColor: '#f1f5f9' },
+                legend: { show: false }
+            };
+            renderApexChart(elementId, options);
+        }
+        
+        function drawCustomerTrendComboCharts(trendList) {
+            if (!trendList || trendList.length === 0) {
+                document.getElementById('chart-cust-productivity-lsp').innerHTML = '<div class="text-center text-slate-400 py-10">データがありません</div>';
+                document.getElementById('chart-cust-colors-setup').innerHTML = '<div class="text-center text-slate-400 py-10">データがありません</div>';
+                document.getElementById('chart-cust-quantity-length').innerHTML = '<div class="text-center text-slate-400 py-10">データがありません</div>';
+                return;
+            }
+            
+            const categories = trendList.map(t => formatMonthLabel(t.month));
+            
+            // Chart 1: 生産性 vs LSP
+            const prodData = trendList.map(t => t.生産性);
+            const lspData = trendList.map(t => t.LSP);
+            drawComboChart('chart-cust-productivity-lsp', categories, '生産性', prodData, 'LSP', lspData, ' m/h', ' m/min');
+            
+            // Chart 2: 平均色数 vs 平均段取り時間
+            const colorData = trendList.map(t => t.平均色数);
+            const setupData = trendList.map(t => t.平均段取時間);
+            drawComboChart('chart-cust-colors-setup', categories, '平均色数', colorData, '段取時間', setupData, '', '分');
+            
+            // Chart 3: 加工本数 vs 平均投入m
+            const honsuData = trendList.map(t => t.加工本数);
+            const mData = trendList.map(t => t.平均投入m);
+            drawComboChart('chart-cust-quantity-length', categories, '加工本数', honsuData, '平均投入m', mData) 
+        }
+
+        // ==========================================
+        // VIEW 3: 管理新 (Daily MTD)
+        // ==========================================
+        function loadDailyData() {
+            const url = `/api/dashboard/daily-mgmt?${getFilterParams()}`;
+            logStep('loadDailyData calling: ' + url);
+            fetch(url)
+                .then(res => {
+                    logStep('loadDailyData response status: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    logStep('loadDailyData JSON parsed successfully. Rendering items...');
+                    document.getElementById('header-report-ym').innerText = `当月: ${formatMonthLabel(data.current_ym)}`;
+                    document.getElementById('lbl-daily-workdays-elapsed').innerText = `${data.workdays.mtd_work} / ${data.workdays.total_work} 日 (${data.workdays.progress_pct.toFixed(1)}%)`;
+                    document.getElementById('daily-workdays-bar').style.width = `${Math.min(data.workdays.progress_pct, 100)}%`;
+                    
+                    renderDailyKPICards(data.kpis);
+                    renderYesterdayMetrics(data.yesterday_summary, data.yesterday);
+                    renderDailyCustomerTable(data.mtd_customers);
+                    renderYesterdayLossTable(data.yesterday_loss_summary);
+                    renderMtdWorkTypeTable(data.mtd_worktype_summary);
+                    
+                    logStep('loadDailyData completed.');
+                    hideLoader();
+                })
+                .catch(err => {
+                    logStep('loadDailyData failed: ' + err);
+                });
+        }
+
+        function renderDailyKPICards(kpis) {
+            const container = document.getElementById('daily-kpis');
+            container.innerHTML = '';
+            
+            const defs = [
+                { label: '1時間当り仕上m', key: '生産性', fmt: v => v.toLocaleString(undefined, {maximumFractionDigits:1}), unit: '', isLowerBetter: false },
+                { label: '仕上m数', key: '仕上m', fmt: v => Math.round(v).toLocaleString(), unit: '', isLowerBetter: false },
+                { label: '所要時間 [h]', key: '所要時間h', fmt: v => v.toLocaleString(undefined, {maximumFractionDigits:1}), unit: '', isLowerBetter: true },
+                { label: '平均ロット数 [m]', key: 'ロット数', fmt: v => Math.round(v).toLocaleString(), unit: '', isLowerBetter: false },
+                { label: '平均LSP [m/min]', key: 'LSP', fmt: v => v.toFixed(2), unit: '', isLowerBetter: false },
+                { label: '平均色数', key: '平均色数', fmt: v => v.toFixed(2), unit: '', isLowerBetter: true },
+                // Set isLowerBetter: true here:
+                { label: '段取り時間/件 [分]', key: '段取時間件', fmt: v => v.toFixed(2), unit: '', isLowerBetter: true }
+            ];
+            
+            defs.forEach(d => {
+                const currVal = kpis.current[d.key];
+                const prevVal = kpis.previous[d.key];
+                const ytyVal = kpis.yty ? kpis.yty[d.key] : null;
+                
+                const valStr = currVal !== null && currVal !== undefined ? d.fmt(currVal) + d.unit : '－';
+                const prevStr = prevVal !== null && prevVal !== undefined ? d.fmt(prevVal) + d.unit : '－';
+                const ytyStr = ytyVal !== null && ytyVal !== undefined ? d.fmt(ytyVal) + d.unit : '－';
+                
+                let deltaHtml = '<span class="text-slate-400">－</span>';
+                if (currVal !== null && prevVal !== null && prevVal) {
+                    const rawDelta = ((currVal - prevVal) / Math.abs(prevVal)) * 100;
+                    const isGood = d.isLowerBetter ? rawDelta <= 0 : rawDelta >= 0;
+                    const color = isGood ? '#10b981' : '#ef4444';
+                    deltaHtml = `<span style="color: ${color}; font-weight: 700;">${rawDelta >= 0 ? '▲' : '▼'}${Math.abs(rawDelta).toFixed(1)}%</span>`;
+                }
+                
+                let ytyDeltaHtml = '<span class="text-slate-400">－</span>';
+                if (currVal !== null && ytyVal !== null && ytyVal) {
+                    const rawDelta = ((currVal - ytyVal) / Math.abs(ytyVal)) * 100;
+                    const isGood = d.isLowerBetter ? rawDelta <= 0 : rawDelta >= 0;
+                    const color = isGood ? '#10b981' : '#ef4444';
+                    ytyDeltaHtml = `<span style="color: ${color}; font-weight: 700;">${rawDelta >= 0 ? '▲' : '▼'}${Math.abs(rawDelta).toFixed(1)}%</span>`;
+                }
+                
+                const card = document.createElement('div');
+                card.className = 'card-light rounded-xl p-3 flex flex-col justify-between space-y-2 text-center hover:scale-[1.02] transition duration-200';
+                card.innerHTML = `
+                    <div class="text-[9px] text-slate-500 font-bold tracking-wide uppercase">${d.label}</div>
+                    <div class="text-lg font-extrabold text-[#0d9488]">${valStr}</div>
+                    <div class="text-[9px] text-slate-400 border-t border-slate-100 pt-1.5 flex flex-col space-y-1">
+                        <div class="flex justify-between w-full">
+                            <span>前月: ${prevStr}</span>
+                            <span>${deltaHtml}</span>
+                        </div>
+                        <div class="flex justify-between w-full border-t border-slate-50 pt-1">
+                            <span>前年: ${ytyStr}</span>
+                            <span>${ytyDeltaHtml}</span>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function onOthersCustomerInputChange() {
+            // Deprecated, using custom searchable dropdown callbacks
+        }
+
+        function toggleOthersCustomerDropdown() {
+            const list = document.getElementById('others-customer-dropdown-list');
+            if (list) {
+                list.classList.toggle('hidden');
+                if (!list.classList.contains('hidden')) {
+                    const searchBox = document.getElementById('filter-others-customer-search');
+                    if (searchBox) {
+                        searchBox.value = '';
+                        searchBox.focus();
+                        filterOthersCustomerOptions();
+                    }
+                }
+            }
+        }
+        
+        // Auto-close dropdown list when clicking outside its container bounds
+        document.addEventListener('click', function(e) {
+            const container = document.getElementById('others-customer-dropdown-container');
+            if (container && !container.contains(e.target)) {
+                const list = document.getElementById('others-customer-dropdown-list');
+                if (list) {
+                    list.classList.add('hidden');
+                }
+            }
+        });
+        
+        function selectOthersCustomerOption(val) {
+            window.selectedOthersCustomer = val;
+            const displayEl = document.getElementById('filter-others-customer-display');
+            if (displayEl) {
+                displayEl.querySelector('span').innerText = val;
+            }
+            const list = document.getElementById('others-customer-dropdown-list');
+            if (list) {
+                list.classList.add('hidden');
+            }
+            loadAnalysisData();
+        }
+        
+        function filterOthersCustomerOptions() {
+            const query = document.getElementById('filter-others-customer-search').value.toLowerCase();
+            const items = document.querySelectorAll('#others-customer-options-container div');
+            items.forEach(item => {
+                const text = item.innerText.toLowerCase();
+                const isAllOption = item.getAttribute('data-value') === '全て';
+                if (isAllOption || text.includes(query)) {
+                    item.classList.remove('hidden');
+                } else {
+                    item.classList.add('hidden');
+                }
+            });
+        }
+
+        function renderYesterdayMetrics(yest, dateStr) {
+            document.getElementById('lbl-yesterday-date').innerText = `昨日: ${dateStr}`;
+            const container = document.getElementById('yesterday-metrics-grid');
+            if (!container) return; // safety check
+            container.innerHTML = '';
+            
+            if (Object.keys(yest).length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-2 text-center py-6 text-xs text-slate-400">データが見つかりません (データ未更新)</div>
+                `;
+                return;
+            }
+            
+            const list = [
+                { label: '仕上m', val: yest.仕上m.toLocaleString() + ' m' },
+                { label: '要検品m', val: yest.要検品m.toLocaleString() + ' m' },
+                { label: 'ロスm', val: yest.ロスm.toLocaleString() + ' m' },
+                { label: '投入m', val: yest.投入m.toLocaleString() + ' m' },
+                { label: '稼働時間', val: yest.稼働時間.toFixed(1) + ' h' },
+                { label: '段取時間', val: yest.段取時間.toFixed(0) + ' 分' }
+            ];
+            
+            list.forEach(item => {
+                const card = document.createElement('div');
+                card.className = 'bg-slate-50 border border-slate-200 rounded-lg p-2 text-center';
+                card.innerHTML = `
+                    <div class="text-[9px] text-slate-500 font-bold">${item.label}</div>
+                    <div class="text-sm font-bold text-slate-800 mt-0.5">${item.val}</div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderDailyCustomerTable(customers) {
+            const tbody = document.querySelector('#tbl-daily-customers tbody');
+            tbody.innerHTML = '';
+            
+            if (customers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-400">データがありません</td></tr>';
+                return;
+            }
+            
+            customers.forEach(c => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="font-bold text-slate-700">${c.得意先}</td>
+                    <td class="font-semibold text-slate-800">${c["1時間当り仕上m"] !== null && c["1時間当り仕上m"] !== undefined ? c["1時間当り仕上m"].toFixed(1) : '－'}</td>
+                    <td class="font-bold text-[#0d9488]">${c.生産件数_pct.toFixed(1)}%</td>
+                    <td>${c.平均ロット数 !== null ? c.平均ロット数.toLocaleString(undefined, {maximumFractionDigits:0}) : '－'}</td>
+                    <td>${c.平均LSP !== null ? c.平均LSP.toFixed(2) : '－'}</td>
+                    <td>${c.平均段取時間 !== null ? c.平均段取時間.toFixed(1) : '－'}</td>
+                    <td class="text-slate-500">${c.生産件数}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function togglePivotRow(parentRow, childClass) {
+            const children = document.querySelectorAll('.' + childClass);
+            const indicator = parentRow.querySelector('.pivot-indicator');
+            const isCollapsed = children[0].classList.contains('hidden');
+            
+            children.forEach(child => {
+                if (isCollapsed) {
+                    child.classList.remove('hidden');
+                } else {
+                    child.classList.add('hidden');
+                }
+            });
+            
+            if (indicator) {
+                indicator.innerText = isCollapsed ? '▼' : '▶';
+            }
+        }
+
+        function renderYesterdayLossTable(summary) {
+            const tbody = document.querySelector('#tbl-daily-loss tbody');
+            tbody.innerHTML = '';
+            
+            if (summary.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center text-slate-400 text-xs py-4">データがありません</td></tr>';
+                return;
+            }
+            
+            // Group by ロス内容
+            const groups = {};
+            summary.forEach(s => {
+                const cat = s.ロス内容 || 'その他';
+                if (!groups[cat]) groups[cat] = [];
+                groups[cat].push(s);
+            });
+            
+            let groupIdx = 0;
+            for (const cat in groups) {
+                const items = groups[cat];
+                const catTotal = items.reduce((acc, curr) => acc + curr.時間h, 0);
+                const childClass = `yest-loss-child-${groupIdx}`;
+                
+                // Parent row (collapsed by default)
+                const parentTr = document.createElement('tr');
+                parentTr.className = 'cursor-pointer hover:bg-slate-100 transition font-bold text-slate-800 bg-slate-50/50';
+                parentTr.onclick = function() { togglePivotRow(parentTr, childClass); };
+                parentTr.innerHTML = `
+                    <td colspan="2" class="text-xs py-2 px-3 select-none">
+                        <div class="flex items-center gap-1.5">
+                            <span class="pivot-indicator text-[10px] text-slate-400 font-mono">▶</span>
+                            <span>${cat}</span>
+                        </div>
+                    </td>
+                    <td class="font-extrabold text-slate-900 text-xs py-2 px-3">${catTotal.toFixed(2)}</td>
+                `;
+                tbody.appendChild(parentTr);
+                
+                // Child rows
+                items.forEach(s => {
+                    const childTr = document.createElement('tr');
+                    childTr.className = `${childClass} hidden bg-white transition text-xs border-b border-slate-50`;
+                    const workOrStop = s.停止理由 ? `${s.作業内容} (${s.停止理由})` : s.作業内容;
+                    childTr.innerHTML = `
+                        <td class="text-slate-400 text-xs py-2 px-3">└</td>
+                        <td class="text-slate-600 text-xs py-2 px-3">${workOrStop || '－'}</td>
+                        <td class="text-slate-600 text-xs py-2 px-3">${s.時間h.toFixed(2)}</td>
+                    `;
+                    tbody.appendChild(childTr);
+                });
+                
+                groupIdx++;
+            }
+        }
+
+        function renderMtdWorkTypeTable(summary) {
+            const tbody = document.querySelector('#tbl-daily-worktype tbody');
+            tbody.innerHTML = '';
+            
+            if (summary.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-slate-400 text-xs py-4">データがありません</td></tr>';
+                return;
+            }
+            
+            // Group by ロス内容
+            const groups = {};
+            summary.forEach(s => {
+                const cat = s.ロス内容 || 'その他';
+                if (!groups[cat]) groups[cat] = [];
+                groups[cat].push(s);
+            });
+            
+            // Calculate grand total for percentage share of each category
+            const grandTotal = summary.reduce((acc, curr) => acc + curr.時間h, 0);
+            
+            let groupIdx = 0;
+            for (const cat in groups) {
+                const items = groups[cat];
+                const catTotal = items.reduce((acc, curr) => acc + curr.時間h, 0);
+                const catPct = grandTotal > 0 ? (catTotal / grandTotal * 100) : 0.0;
+                const childClass = `mtd-wt-child-${groupIdx}`;
+                
+                // Parent row (collapsed by default)
+                const parentTr = document.createElement('tr');
+                parentTr.className = 'cursor-pointer hover:bg-slate-100 transition font-bold text-slate-800 bg-slate-50/50';
+                parentTr.onclick = function() { togglePivotRow(parentTr, childClass); };
+                parentTr.innerHTML = `
+                    <td colspan="2" class="text-xs py-2 px-3 select-none">
+                        <div class="flex items-center gap-1.5">
+                            <span class="pivot-indicator text-[10px] text-slate-400 font-mono">▶</span>
+                            <span>${cat}</span>
+                        </div>
+                    </td>
+                    <td class="font-extrabold text-slate-900 text-xs py-2 px-3">${catTotal.toFixed(2)}</td>
+                    <td class="font-extrabold text-teal-600 text-xs py-2 px-3">${catPct.toFixed(1)}%</td>
+                `;
+                tbody.appendChild(parentTr);
+                
+                // Child rows
+                items.forEach(s => {
+                    const childTr = document.createElement('tr');
+                    childTr.className = `${childClass} hidden bg-white transition text-xs border-b border-slate-50`;
+                    childTr.innerHTML = `
+                        <td class="text-slate-400 text-xs py-2 px-3">└</td>
+                        <td class="text-slate-600 text-xs py-2 px-3">${s.作業内容 || '－'}</td>
+                        <td class="text-slate-600 text-xs py-2 px-3">${s.時間h.toFixed(2)}</td>
+                        <td class="text-teal-600/70 text-xs py-2 px-3">${s.比率_pct.toFixed(1)}%</td>
+                    `;
+                    tbody.appendChild(childTr);
+                });
+                
+                groupIdx++;
+            }
+        }
+
+        // ==========================================
+        // VIEW 4: 管理旧 (Trend)
+        // ==========================================
+        function loadTrendData() {
+            const url = `/api/dashboard/trend?metric=${currentTrendMetric}&${getFilterParams()}`;
+            logStep('loadTrendData calling: ' + url);
+            fetch(url)
+                .then(res => {
+                    logStep('loadTrendData response status: ' + res.status);
+                    return res.json();
+                })
+                .then(data => {
+                    logStep('loadTrendData JSON parsed successfully. Rendering items...');
+                    if (data.report_ym) {
+                        document.getElementById('header-report-ym').innerText = `対象月: ${formatMonthLabel(data.report_ym)}`;
+                    }
+                    const hdrRow = document.getElementById('tbl-trend-hdr-row');
+                    hdrRow.innerHTML = '<th>指標項目</th>';
+                    
+                    const valRow = document.getElementById('tbl-trend-val-row');
+                    valRow.innerHTML = '<td class="font-bold text-slate-700">実績値</td>';
+                    
+                    const tgtRow = document.getElementById('tbl-trend-tgt-row');
+                    tgtRow.innerHTML = '<td class="font-bold text-slate-700">目標値</td>';
+                    
+                    data.series.forEach(item => {
+                        const mLabel = formatMonthLabel(item.month);
+                        
+                        const th = document.createElement('th');
+                        th.innerText = mLabel;
+                        hdrRow.appendChild(th);
+                        
+                        const tdVal = document.createElement('td');
+                        tdVal.innerText = item.value !== null ? item.value.toLocaleString(undefined, {maximumFractionDigits:2}) : '－';
+                        valRow.appendChild(tdVal);
+                        
+                        const tdTgt = document.createElement('td');
+                        tdTgt.className = 'text-rose-500 font-bold';
+                        tdTgt.innerText = item.target !== null ? item.target.toLocaleString(undefined, {maximumFractionDigits:2}) : '－';
+                        tgtRow.appendChild(tdTgt);
+                    });
+                    
+                    drawTrendChart(data.series);
+                    logStep('loadTrendData completed.');
+                    hideLoader();
+                })
+                .catch(err => {
+                    logStep('loadTrendData failed: ' + err);
+                });
+        }
+
+        function drawTrendChart(series) {
+            const categories = series.map(s => formatMonthLabel(s.month));
+            const values = series.map(s => s.value);
+            const targets = series.map(s => s.target);
+            
+            const chartSeries = [
+                { name: '実績値', type: 'column', data: values },
+                { name: '目標値', type: 'line', data: targets }
+            ];
+            
+            const options = {
+                chart: { type: 'line', height: 280, toolbar: { show: false }, background: 'transparent' },
+                theme: { mode: 'light' },
+                stroke: { width: [0, 3], curve: 'smooth', dashArray: [0, 5] },
+                series: chartSeries,
+                markers: { size: [0, 5] },
+                labels: categories,
+                colors: ['#0d9488', '#f43f5e'], // teal-600 vs rose-500
+                grid: { borderColor: '#e2e8f0' },
+                legend: { position: 'bottom' },
+                plotOptions: { bar: { columnWidth: '50%', borderRadius: 4 } },
+                yaxis: {
+                    labels: {
+                        formatter: function(val) {
+                            if (val === null || val === undefined) return '';
+                            return val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                        }
+                    }
+                }
+            };
+            
+            renderApexChart('chart-trend-main', options);
+        }
+
+        function renderApexChart(id, options) {
+            if (chartInstances[id]) {
+                chartInstances[id].destroy();
+            }
+            const el = document.getElementById(id);
+            if (el) {
+                const chart = new ApexCharts(el, options);
+                chart.render();
+                chartInstances[id] = chart;
+            }
+        }
+        
+        function getReportDates() {
+            const today = new Date();
+            let rYear = today.getFullYear();
+            let rMonth = today.getMonth(); // previous month since getMonth() is 0-indexed and returns current month
+            
+            if (rMonth === 0) {
+                rYear = rYear - 1;
+                rMonth = 12;
+            }
+            
+            let pYear = rYear;
+            let pMonth = rMonth - 1;
+            if (pMonth === 0) {
+                pYear = pYear - 1;
+                pMonth = 12;
+            }
+            
+            return [
+                `${rYear}/${rMonth.toString().padStart(2, '0')}`,
+                `${pYear}/${pMonth.toString().padStart(2, '0')}`
+            ];
+        }
+
+        function onOthersCustomerFilterChange() {
+            logStep('Others dedicated customer filter changed. Reloading analysis view...');
+            loadAnalysisData();
+        }
+    </script>
+</body>
+</html>
